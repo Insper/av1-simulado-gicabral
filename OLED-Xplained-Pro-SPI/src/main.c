@@ -24,13 +24,43 @@
 #define LED3_PIN		  2
 #define LED3_IDX_MASK    (1<<LED3_PIN)
 
+#define BUT1_PIO            PIOD
+#define BUT1_PIO_ID         16
+#define BUT1_PIO_IDX        28
+#define BUT1_PIO_IDX_MASK   (1u << BUT1_PIO_IDX)
+
+#define BUT2_PIO			PIOC
+#define BUT2_PIO_ID			ID_PIOC
+#define BUT2_PIO_IDX		31
+#define BUT2_PIO_IDX_MASK	(1 << BUT2_PIO_IDX)
+
+#define BUT3_PIO			PIOA
+#define BUT3_PIO_ID			ID_PIOA
+#define BUT3_PIO_IDX		19
+#define BUT3_PIO_IDX_MASK	(1 << BUT3_PIO_IDX)
+
 /* variaveis globais                                                    */
 /************************************************************************/
 
 volatile char flag_tc = 0;
 volatile char flag_tc2 = 0;
 volatile char flag_tc3 = 0;
+volatile short int but1_flag = 0;
+volatile short int but2_flag = 0;
+volatile short int but3_flag = 0;
 
+void but1_callback(void);
+void but1_callback(void){
+	but1_flag = 1;
+}
+void but2_callback(void);
+void but2_callback(void){
+	but2_flag = 1;
+}
+void but3_callback(void);
+void but3_callback(void){
+	but3_flag = 1;
+}
 
 
 
@@ -141,6 +171,31 @@ void LED_init(int estado){
 	pio_set_output(LED2_PIO, LED2_IDX_MASK, estado, 0, 0 );
 };
 
+void init(void)
+{
+	pmc_enable_periph_clk(BUT1_PIO_ID);
+	pmc_enable_periph_clk(BUT2_PIO_ID);
+	pmc_enable_periph_clk(BUT3_PIO_ID);
+	pio_configure(BUT1_PIO, PIO_INPUT, BUT1_PIO_IDX_MASK, PIO_PULLUP | PIO_DEBOUNCE);
+	pio_configure(BUT2_PIO, PIO_INPUT, BUT2_PIO_IDX_MASK, PIO_PULLUP | PIO_DEBOUNCE);
+	pio_configure(BUT3_PIO, PIO_INPUT, BUT3_PIO_IDX_MASK, PIO_PULLUP | PIO_DEBOUNCE);
+	pio_set_debounce_filter(BUT1_PIO, BUT1_PIO_IDX_MASK, 100);
+	pio_set_debounce_filter(BUT2_PIO, BUT2_PIO_IDX_MASK, 100);
+	pio_set_debounce_filter(BUT2_PIO, BUT2_PIO_IDX_MASK, 100);
+	pio_handler_set(BUT1_PIO, BUT1_PIO_ID, BUT1_PIO_IDX_MASK, PIO_IT_RISE_EDGE, but1_callback);
+	pio_handler_set(BUT2_PIO, BUT2_PIO_ID, BUT2_PIO_IDX_MASK, PIO_IT_RISE_EDGE, but2_callback);
+	pio_handler_set(BUT3_PIO, BUT3_PIO_ID, BUT3_PIO_IDX_MASK, PIO_IT_RISE_EDGE, but3_callback);
+	pio_enable_interrupt(BUT1_PIO, BUT1_PIO_IDX_MASK);
+	pio_enable_interrupt(BUT2_PIO, BUT2_PIO_IDX_MASK);
+	pio_enable_interrupt(BUT3_PIO, BUT3_PIO_IDX_MASK);
+	NVIC_EnableIRQ(BUT1_PIO_ID);
+	NVIC_SetPriority(BUT1_PIO_ID, 4);
+	NVIC_EnableIRQ(BUT2_PIO_ID);
+	NVIC_SetPriority(BUT2_PIO_ID, 4);
+	NVIC_EnableIRQ(BUT3_PIO_ID);
+	NVIC_SetPriority(BUT3_PIO_ID, 4);
+}
+
 
 /**
 * Configura TimerCounter (TC) para gerar uma interrupcao no canal (ID_TC e TC_CHANNEL)
@@ -192,12 +247,13 @@ int main (void)
 	/* Configura Leds */
 	LED_init(0);
 	
-	
 	board_init();
 	sysclk_init();
 	delay_init();
 	sysclk_init();
 	io_init();
+	init();
+
 
 
   // Init OLED
@@ -207,6 +263,11 @@ int main (void)
 	TC_init(TC0, ID_TC0, 0, 1);
 	TC_init(TC0, ID_TC2, 2, 10);
 	
+	int ready1 = 0;
+	int ready2 = 0;
+	int ready3 = 0;
+	
+	
 
   
   // Escreve na tela um circulo e um texto
@@ -215,17 +276,46 @@ int main (void)
 	
 
 	while(1) {
-		if(flag_tc){
+		
+		if(flag_tc && ready1){
 			pisca_led(1,100,1);
 			flag_tc = 0;
 		}
-		if(flag_tc2){
+		
+		if(flag_tc2 && ready2){
 			pisca_led(1,100,2);
 			flag_tc2 = 0;
 		}
-		if(flag_tc3){
+		if(flag_tc3 && ready3){
 			pisca_led(1,100,3);
 			flag_tc3 = 0;
+		}
+		if(but1_flag){
+			if(ready1){
+				ready1 = 0;
+			}
+			else{
+				ready1 = 1;
+			}
+			but1_flag = 0;
+		}
+		if(but2_flag){
+			if(ready2){
+				ready2 = 0;
+			}
+			else{
+				ready2 = 1;
+			}
+			but2_flag = 0;
+		}
+		if(but3_flag){
+			if(ready3){
+				ready3 = 0;
+			}
+			else{
+				ready3 = 1;
+			}
+			but3_flag = 0;
 		}
 	
 		pmc_sleep(SAM_PM_SMODE_SLEEP_WFI);
