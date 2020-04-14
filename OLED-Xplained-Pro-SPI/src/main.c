@@ -39,41 +39,50 @@
 #define BUT3_PIO_IDX		19
 #define BUT3_PIO_IDX_MASK	(1 << BUT3_PIO_IDX)
 
+typedef struct  {
+	uint32_t year;
+	uint32_t month;
+	uint32_t day;
+	uint32_t week;
+	uint32_t hour;
+	uint32_t minute;
+	uint32_t seccond;
+} calendar;
+
+
 /* variaveis globais                                                    */
 /************************************************************************/
 
 volatile char flag_tc = 0;
 volatile char flag_tc2 = 0;
 volatile char flag_tc3 = 0;
-volatile short int but1_flag = 0;
-volatile short int but2_flag = 0;
-volatile short int but3_flag = 0;
+volatile char flag_rtc = 0;
+volatile char flag_rtt = 0;
+volatile char leds_flag = 0;
+volatile short int but1_flag = 1;
+volatile short int but2_flag = 1;
+volatile short int but3_flag = 1;
+volatile Bool f_rtt_alarme = false;
+
 
 void but1_callback(void);
 void but1_callback(void){
-	but1_flag = 1;
+	but1_flag != but1_flag ;
 }
 void but2_callback(void);
 void but2_callback(void){
-	but2_flag = 1;
+	but2_flag != but2_flag;
 }
 void but3_callback(void);
 void but3_callback(void){
-	but3_flag = 1;
+	but3_flag != but3_flag;
 }
-
-
 
 void LED_init(int estado);
 void TC_init(Tc * TC, int ID_TC, int TC_CHANNEL, int freq);
-
-
-
-/************************************************************************/
-/* prototypes                                                           */
-/************************************************************************/
+static void RTT_init(uint16_t pllPreScale, uint32_t IrqNPulses);
 void io_init(void);
-void pisca_led(int n, int t, int n_led);
+void RTC_init(Rtc *rtc, uint32_t id_rtc, calendar t, uint32_t irq_type);
 void pin_toggle(Pio *pio, uint32_t mask);
 
 void io_init(void){
@@ -83,9 +92,101 @@ void io_init(void){
 }
 
 
+void RTT_Handler(void)
+{
+	uint32_t ul_status;
+
+	/* Get RTT status - ACK */
+	ul_status = rtt_get_status(RTT);
+
+	/* IRQ due to Time has changed */
+	if ((ul_status & RTT_SR_RTTINC) == RTT_SR_RTTINC) { 
+				flag_rtt = 1;
+
+	 }
+
+	/* IRQ due to Alarm */
+	if ((ul_status & RTT_SR_ALMS) == RTT_SR_ALMS) {
+		leds_flag = !leds_flag;
+		f_rtt_alarme = true;                  // flag RTT alarme
+	}
+}
+
+static float get_time_rtt(){
+	uint ul_previous_time = rtt_read_timer_value(RTT);
+}
+
+static void RTT_init(uint16_t pllPreScale, uint32_t IrqNPulses)
+{
+	uint32_t ul_previous_time;
+
+	/* Configure RTT for a 1 second tick interrupt */
+	rtt_sel_source(RTT, false);
+	rtt_init(RTT, pllPreScale);
+	
+	ul_previous_time = rtt_read_timer_value(RTT);
+	while (ul_previous_time == rtt_read_timer_value(RTT));
+	
+	rtt_write_alarm_time(RTT, IrqNPulses+ul_previous_time);
+
+	/* Enable RTT interrupt */
+	NVIC_DisableIRQ(RTT_IRQn);
+	NVIC_ClearPendingIRQ(RTT_IRQn);
+	NVIC_SetPriority(RTT_IRQn, 0);
+	NVIC_EnableIRQ(RTT_IRQn);
+	rtt_enable_interrupt(RTT, RTT_MR_ALMIEN);
+}
+
+void RTC_Handler(void)
+{
+	uint32_t ul_status = rtc_get_status(RTC);
+
+	/*
+	*  Verifica por qual motivo entrou
+	*  na interrupcao, se foi por segundo
+	*  ou Alarm
+	*/
+	if ((ul_status & RTC_SR_SEC) == RTC_SR_SEC) {
+		flag_rtc = 1;
+		rtc_clear_status(RTC, RTC_SCCR_SECCLR);
+	}
+	
+	/* Time or date alarm */
+	if ((ul_status & RTC_SR_ALARM) == RTC_SR_ALARM) {
+		rtc_clear_status(RTC, RTC_SCCR_ALRCLR);
+	}
+	
+	rtc_clear_status(RTC, RTC_SCCR_ACKCLR);
+	rtc_clear_status(RTC, RTC_SCCR_TIMCLR);
+	rtc_clear_status(RTC, RTC_SCCR_CALCLR);
+	rtc_clear_status(RTC, RTC_SCCR_TDERRCLR);
+}
+
 /**
-*  Interrupt handler for TC1 interrupt.
+* Configura o RTC para funcionar com interrupcao de alarme
 */
+void RTC_init(Rtc *rtc, uint32_t id_rtc, calendar t, uint32_t irq_type){
+	/* Configura o PMC */
+	pmc_enable_periph_clk(ID_RTC);
+
+	/* Default RTC configuration, 24-hour mode */
+	rtc_set_hour_mode(rtc, 0);
+
+	/* Configura data e hora manualmente */
+	rtc_set_date(rtc, t.year, t.month, t.day, t.week);
+	rtc_set_time(rtc, t.hour, t.minute, t.seccond);
+
+	/* Configure RTC interrupts */
+	NVIC_DisableIRQ(id_rtc);
+	NVIC_ClearPendingIRQ(id_rtc);
+	NVIC_SetPriority(id_rtc, 0);
+	NVIC_EnableIRQ(id_rtc);
+
+	/* Ativa interrupcao via alarme */
+	rtc_enable_interrupt(rtc,  irq_type);
+}
+
+
 void TC1_Handler(void){
 	volatile uint32_t ul_dummy;
 
@@ -131,32 +232,6 @@ void TC0_Handler(void){
 	flag_tc3 = 1;
 }
 
-void pisca_led(int n, int t, int n_led){
-	if(n_led == 1){
-		for (int i=0;i<n;i++){
-			pio_clear(LED1_PIO, LED1_IDX_MASK);
-			delay_ms(t);
-			pio_set(LED1_PIO, LED1_IDX_MASK);
-			delay_ms(t);
-		}
-	}
-	if(n_led == 3){
-		for (int i=0;i<n;i++){
-			pio_clear(LED3_PIO, LED3_IDX_MASK);
-			delay_ms(t);
-			pio_set(LED3_PIO, LED3_IDX_MASK);
-			delay_ms(t);
-		}
-	}
-	if(n_led == 2){
-		for (int i=0;i<n;i++){
-			pio_clear(LED2_PIO, LED2_IDX_MASK);
-			delay_ms(t);
-			pio_set(LED2_PIO, LED2_IDX_MASK);
-			delay_ms(t);
-		}
-	}
-}
 
 
 /**
@@ -236,11 +311,9 @@ void pin_toggle(Pio *pio, uint32_t mask){
 	pio_set(pio,mask);
 }
 
+
 int main (void)
 {
-	/* Initialize the SAM system */
-	sysclk_init();
-
 	/* Disable the watchdog */
 	WDT->WDT_MR = WDT_MR_WDDIS;
 
@@ -250,11 +323,9 @@ int main (void)
 	board_init();
 	sysclk_init();
 	delay_init();
-	sysclk_init();
 	io_init();
 	init();
-
-
+	f_rtt_alarme = true;
 
   // Init OLED
 	gfx_mono_ssd1306_init();
@@ -263,62 +334,71 @@ int main (void)
 	TC_init(TC0, ID_TC0, 0, 1);
 	TC_init(TC0, ID_TC2, 2, 10);
 	
-	int ready1 = 0;
-	int ready2 = 0;
-	int ready3 = 0;
+	calendar rtc_initial = {2018, 3, 19, 12, 15, 45 ,1};
+	RTC_init(RTC, ID_RTC, rtc_initial, RTC_IER_ALREN | RTC_IER_SECEN);
 	
+	/* configura alarme do RTC */
+	rtc_set_date_alarm(RTC, 1, rtc_initial.month, 1, rtc_initial.day);
+	rtc_set_time_alarm(RTC, 1, rtc_initial.hour, 1, rtc_initial.minute, 1, rtc_initial.seccond + 20);
 	
-
   
-  // Escreve na tela um circulo e um texto
 	//gfx_mono_draw_filled_circle(20, 16, 16, GFX_PIXEL_SET, GFX_WHOLE);
-    //gfx_mono_draw_string("rique", 50,16, &sysfont);
+    //gfx_mono_draw_string("5    10   1", 10,5, &sysfont);
 	
-
+	uint32_t h, m, s;
+	char timeBuffer[512];
+	int qtd;
+	
 	while(1) {
-		
-		if(flag_tc && ready1){
-			pisca_led(1,100,1);
-			flag_tc = 0;
-		}
-		
-		if(flag_tc2 && ready2){
-			pisca_led(1,100,2);
-			flag_tc2 = 0;
-		}
-		if(flag_tc3 && ready3){
-			pisca_led(1,100,3);
-			flag_tc3 = 0;
-		}
-		if(but1_flag){
-			if(ready1){
-				ready1 = 0;
+		if(flag_rtt){
+			int i;
+			if(i == 60){
+				i = 0;
+				gfx_mono_draw_string("         ", -1, 4, &sysfont);
+
 			}
-			else{
-				ready1 = 1;
-			}
-			but1_flag = 0;
+			gfx_mono_draw_filled_circle(i, 5, 1, GFX_PIXEL_SET, GFX_WHOLE);
+			i+= 15;
+			flag_rtt = 0;
 		}
-		if(but2_flag){
-			if(ready2){
-				ready2 = 0;
-			}
-			else{
-				ready2 = 1;
-			}
-			but2_flag = 0;
+		if(flag_rtc){
+			rtc_get_time(RTC, &h, &m, &s);
+			sprintf(timeBuffer, "%2d:%2d:%2d", h, m, s);
+			gfx_mono_draw_string(timeBuffer, 50,16, &sysfont);
+			flag_rtc = 0;
 		}
-		if(but3_flag){
-			if(ready3){
-				ready3 = 0;
-			}
-			else{
-				ready3 = 1;
-			}
-			but3_flag = 0;
+		if (f_rtt_alarme){
+   
+		  /*
+		   * IRQ apos 5s -> 8*0.5
+		   */
+		  uint16_t pllPreScale = (int) (((float) 32768) / 3.0);
+		  uint32_t irqRTTvalue = 10;
+
+      
+		  // reinicia RTT para gerar um novo IRQ
+		  RTT_init(pllPreScale, irqRTTvalue); 
+      
+		  f_rtt_alarme = false;
 		}
-	
+		if(leds_flag){
+			if(flag_tc && but1_flag){
+				pin_toggle(LED1_PIO, LED1_IDX_MASK);
+				flag_tc = 0;
+			}
+					
+			if(flag_tc2 && but2_flag){
+				pin_toggle(LED2_PIO, LED2_IDX_MASK);
+				flag_tc2 = 0;
+			}
+			if(flag_tc3 && but3_flag){
+				pin_toggle(LED3_PIO, LED3_IDX_MASK);
+				flag_tc3 = 0;
+			}
+		}
+
 		pmc_sleep(SAM_PM_SMODE_SLEEP_WFI);
+
 
   }  
   return 0;
